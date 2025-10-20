@@ -36,10 +36,7 @@ pub struct Identifier {
 ///
 /// This is used when forwarding data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Endpoint {
-    pub source: SocketAddr,
-    pub endpoint: SocketAddr,
-}
+pub struct Endpoint(pub SocketAddr);
 
 /// The default HashMap is created without allocating capacity. To improve
 /// performance, the turn server needs to pre-allocate the available capacity.
@@ -604,7 +601,6 @@ where
     ///     }
     /// }
     ///
-    /// let endpoint = "127.0.0.1:3478".parse().unwrap();
     /// let addr = Identifier {
     ///     source: "127.0.0.1:8080".parse().unwrap(),
     ///     interface: "127.0.0.1:3478".parse().unwrap(),
@@ -631,18 +627,13 @@ where
     /// let port = sessions.allocate(&addr, None).unwrap();
     /// let peer_port = sessions.allocate(&peer_addr, None).unwrap();
     ///
-    /// assert!(!sessions.create_permission(&addr, &endpoint, &[port]));
-    /// assert!(sessions.create_permission(&addr, &endpoint, &[peer_port]));
+    /// assert!(!sessions.create_permission(&addr, &[port]));
+    /// assert!(sessions.create_permission(&addr, &[peer_port]));
     ///
-    /// assert!(!sessions.create_permission(&peer_addr, &endpoint, &[peer_port]));
-    /// assert!(sessions.create_permission(&peer_addr, &endpoint, &[port]));
+    /// assert!(!sessions.create_permission(&peer_addr, &[peer_port]));
+    /// assert!(sessions.create_permission(&peer_addr, &[port]));
     /// ```
-    pub fn create_permission(
-        &self,
-        addr: &Identifier,
-        endpoint: &SocketAddr,
-        ports: &[u16],
-    ) -> bool {
+    pub fn create_permission(&self, addr: &Identifier, ports: &[u16]) -> bool {
         let mut sessions = self.sessions.write();
         let mut port_relay_table = self.port_relay_table.write();
         let port_mapping_table = self.port_mapping_table.read();
@@ -679,15 +670,9 @@ where
             // Create a port forwarding mapping relationship for each peer session.
             for (peer, port) in peers {
                 port_relay_table
-                    .entry(*peer)
+                    .entry(*addr)
                     .or_insert_with(|| HashMap::with_capacity(20))
-                    .insert(
-                        local_port,
-                        Endpoint {
-                            source: addr.source,
-                            endpoint: *endpoint,
-                        },
-                    );
+                    .insert(port, Endpoint(peer.source));
 
                 // Do not store the same peer ports to the permission list over and over again.
                 if !permissions.contains(&port) {
@@ -725,7 +710,6 @@ where
     ///     }
     /// }
     ///
-    /// let endpoint = "127.0.0.1:3478".parse().unwrap();
     /// let addr = Identifier {
     ///     source: "127.0.0.1:8080".parse().unwrap(),
     ///     interface: "127.0.0.1:3478".parse().unwrap(),
@@ -771,8 +755,8 @@ where
     ///     );
     /// }
     ///
-    /// assert!(sessions.bind_channel(&addr, &endpoint, peer_port, 0x4000));
-    /// assert!(sessions.bind_channel(&peer_addr, &endpoint, port, 0x4000));
+    /// assert!(sessions.bind_channel(&addr, peer_port, 0x4000));
+    /// assert!(sessions.bind_channel(&peer_addr, port, 0x4000));
     ///
     /// {
     ///     assert_eq!(
@@ -794,13 +778,7 @@ where
     ///     );
     /// }
     /// ```
-    pub fn bind_channel(
-        &self,
-        addr: &Identifier,
-        endpoint: &SocketAddr,
-        port: u16,
-        channel: u16,
-    ) -> bool {
+    pub fn bind_channel(&self, addr: &Identifier, port: u16, channel: u16) -> bool {
         // Finds the address of the bound opposing port.
         let peer = if let Some(it) = self.port_mapping_table.read().get(&port) {
             *it
@@ -824,22 +802,16 @@ where
         }
 
         // Binding ports also creates permissions.
-        if !self.create_permission(addr, endpoint, &[port]) {
+        if !self.create_permission(addr, &[port]) {
             return false;
         }
 
         // Create channel forwarding mapping relationships for peers.
         self.channel_relay_table
             .write()
-            .entry(peer)
+            .entry(*addr)
             .or_insert_with(|| HashMap::with_capacity(10))
-            .insert(
-                channel,
-                Endpoint {
-                    source: addr.source,
-                    endpoint: *endpoint,
-                },
-            );
+            .insert(channel, Endpoint(peer.source));
 
         true
     }
@@ -855,6 +827,8 @@ where
     /// use codec::crypto::Password;
     /// use pollster::FutureExt;
     ///
+    /// use std::net::SocketAddr;
+    ///
     /// #[derive(Clone)]
     /// struct ServiceHandlerTest;
     ///
@@ -868,7 +842,6 @@ where
     ///     }
     /// }
     ///
-    /// let endpoint = "127.0.0.1:3478".parse().unwrap();
     /// let addr = Identifier {
     ///     source: "127.0.0.1:8080".parse().unwrap(),
     ///     interface: "127.0.0.1:3478".parse().unwrap(),
@@ -895,30 +868,48 @@ where
     /// let port = sessions.allocate(&addr, None).unwrap();
     /// let peer_port = sessions.allocate(&peer_addr, None).unwrap();
     ///
-    /// assert!(sessions.bind_channel(&addr, &endpoint, peer_port, 0x4000));
-    /// assert!(sessions.bind_channel(&peer_addr, &endpoint, port, 0x4000));
+    /// assert!(sessions.bind_channel(&addr, peer_port, 0x4000));
+    /// assert!(sessions.bind_channel(&peer_addr, port, 0x4000));
     /// assert_eq!(
     ///     sessions
     ///         .get_channel_relay_address(&addr, 0x4000)
     ///         .unwrap()
-    ///         .endpoint,
-    ///     endpoint
+    ///         .0.0,
+    ///     peer_addr.source
     /// );
     ///
     /// assert_eq!(
     ///     sessions
     ///         .get_channel_relay_address(&peer_addr, 0x4000)
     ///         .unwrap()
-    ///         .endpoint,
-    ///     endpoint
+    ///         .0.0,
+    ///     addr.source
     /// );
     /// ```
-    pub fn get_channel_relay_address(&self, addr: &Identifier, channel: u16) -> Option<Endpoint> {
-        self.channel_relay_table
-            .read()
-            .get(addr)?
-            .get(&channel)
-            .copied()
+    pub fn get_channel_relay_address(
+        &self,
+        addr: &Identifier,
+        channel: u16,
+    ) -> Option<(Endpoint, Option<u16>)> {
+        let channel_relay_table = self.channel_relay_table.read();
+        let peer = channel_relay_table.get(addr)?.get(&channel).copied()?;
+
+        // Try to find a reverse mapping
+        let reverse_addr = Identifier {
+            source: peer.0,
+            interface: addr.interface,
+        };
+
+        let Some(reverse_table) = channel_relay_table.get(&reverse_addr) else {
+            return Some((peer, None));
+        };
+
+        // Find matching reverse channel (where endpoint matches original source)
+        let reverse_channel = reverse_table.iter().find_map(|(&rev_channel, endpoint)| {
+            (endpoint.0 == addr.source).then_some(rev_channel)
+        });
+
+        Some((peer, reverse_channel))
     }
 
     /// Get the address of the port binding.
@@ -945,7 +936,6 @@ where
     ///     }
     /// }
     ///
-    /// let endpoint = "127.0.0.1:3478".parse().unwrap();
     /// let addr = Identifier {
     ///     source: "127.0.0.1:8080".parse().unwrap(),
     ///     interface: "127.0.0.1:3478".parse().unwrap(),
@@ -972,23 +962,23 @@ where
     /// let port = sessions.allocate(&addr, None).unwrap();
     /// let peer_port = sessions.allocate(&peer_addr, None).unwrap();
     ///
-    /// assert!(sessions.create_permission(&addr, &endpoint, &[peer_port]));
-    /// assert!(sessions.create_permission(&peer_addr, &endpoint, &[port]));
+    /// assert!(sessions.create_permission(&addr, &[peer_port]));
+    /// assert!(sessions.create_permission(&peer_addr, &[port]));
     ///
     /// assert_eq!(
     ///     sessions
     ///         .get_relay_address(&addr, peer_port)
     ///         .unwrap()
-    ///         .endpoint,
-    ///     endpoint
+    ///         .0,
+    ///     peer_addr.source
     /// );
     ///
     /// assert_eq!(
     ///     sessions
     ///         .get_relay_address(&peer_addr, port)
     ///         .unwrap()
-    ///         .endpoint,
-    ///     endpoint
+    ///         .0,
+    ///     addr.source
     /// );
     /// ```
     pub fn get_relay_address(&self, addr: &Identifier, port: u16) -> Option<Endpoint> {

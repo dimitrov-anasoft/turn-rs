@@ -16,6 +16,7 @@ use codec::{
         methods::*,
     },
 };
+use rand::RngCore;
 
 struct Request<'a, 'b, T, M>
 where
@@ -117,7 +118,6 @@ where
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Target {
     pub endpoint: Option<SocketAddr>,
-    pub relay: Option<SocketAddr>,
 }
 
 // The response.
@@ -129,6 +129,7 @@ pub enum Response<'a> {
         target: Target,
     },
     ChannelData {
+        preamble: &'a [u8],
         bytes: &'a [u8],
         target: Target,
     },
@@ -400,11 +401,7 @@ where
         return reject(req, ErrorType::Unauthorized);
     };
 
-    if !req
-        .state
-        .manager
-        .bind_channel(req.id, &req.state.endpoint, peer.port(), number)
-    {
+    if !req.state.manager.bind_channel(req.id, peer.port(), number) {
         return reject(req, ErrorType::Forbidden);
     }
 
@@ -477,11 +474,7 @@ where
         ports.push(it.port());
     }
 
-    if !req
-        .state
-        .manager
-        .create_permission(req.id, &req.state.endpoint, &ports)
-    {
+    if !req.state.manager.create_permission(req.id, &ports) {
         return reject(req, ErrorType::Forbidden);
     }
 
@@ -556,7 +549,6 @@ where
         req.state.manager.get_session(req.id).get_ref() && let Some(local_port) = *allocate_port
     {
         let relay = req.state.manager.get_relay_address(req.id, peer.port())?;
-
         {
             let mut message = MessageEncoder::extend(DATA_INDICATION, req.payload, req.encode_buffer);
             message.append::<XorPeerAddress>(SocketAddr::new(req.state.interface.ip(), local_port));
@@ -568,9 +560,8 @@ where
             method: DATA_INDICATION,
             bytes: req.encode_buffer,
             target: Target {
-                relay: Some(relay.source),
-                endpoint: if req.state.endpoint != relay.endpoint {
-                    Some(relay.endpoint)
+                endpoint: if req.state.endpoint != relay.0 {
+                    Some(relay.0)
                 } else {
                     None
                 },
@@ -678,20 +669,62 @@ fn channel_data<'a, T>(
 where
     T: ServiceHandler,
 {
-    let relay = req
-        .state
-        .manager
-        .get_channel_relay_address(req.id, req.payload.number())?;
+    let channel = req.payload.number();
+    let Some((relay, maybe_rev_channel)) =
+        req.state.manager.get_channel_relay_address(req.id, channel)
+    else {
+        return None;
+    };
 
-    Some(Response::ChannelData {
-        bytes,
-        target: Target {
-            relay: Some(relay.source),
-            endpoint: if req.state.endpoint != relay.endpoint {
-                Some(relay.endpoint)
+    let target = Target {
+        endpoint: (req.state.endpoint != relay.0).then_some(relay.0),
+    };
+
+    match maybe_rev_channel {
+        Some(rev_channel) => {
+            if channel != rev_channel {
+                req.encode_buffer.clear();
+                req.encode_buffer
+                    .extend_from_slice(&rev_channel.to_be_bytes());
+                Some(Response::ChannelData {
+                    preamble: &req.encode_buffer[..2],
+                    bytes: &bytes[2..],
+                    target,
+                })
             } else {
-                None
-            },
-        },
-    })
+                Some(Response::ChannelData {
+                    preamble: &[],
+                    bytes,
+                    target,
+                })
+            }
+        }
+
+        None => {
+            let session = req.state.manager.get_session(req.id);
+            let Some(Session::Authenticated {
+                allocate_port: Some(local_port),
+                ..
+            }) = session.get_ref()
+            else {
+                return None;
+            };
+
+            let mut transaction_id = [0u8; 12];
+            rand::rng().fill_bytes(&mut transaction_id);
+
+            let mut message =
+                MessageEncoder::new(DATA_INDICATION, &transaction_id, req.encode_buffer);
+            message
+                .append::<XorPeerAddress>(SocketAddr::new(req.state.interface.ip(), *local_port));
+            message.append::<Data>(req.payload.as_bytes());
+            message.flush(None).ok()?;
+
+            Some(Response::Message {
+                method: DATA_INDICATION,
+                bytes: req.encode_buffer,
+                target,
+            })
+        }
+    }
 }

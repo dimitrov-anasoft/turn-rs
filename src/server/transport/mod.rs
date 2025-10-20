@@ -4,11 +4,8 @@ pub mod udp;
 use std::{net::SocketAddr, time::Duration};
 
 use anyhow::Result;
-use bytes::Bytes;
-use service::{
-    routing::Response,
-    session::Identifier,
-};
+use bytes::{Bytes, BytesMut};
+use service::{routing::Response, session::Identifier};
 
 use tokio::time::interval;
 
@@ -97,27 +94,35 @@ pub trait Listener: Sized + Send {
                                         continue;
                                     };
 
-                                    let (ty, bytes, target) = match res {
+                                    let (ty, preamble, bytes, target) = match res {
                                         Response::Message {
                                             method,
                                             bytes,
                                             target,
-                                        } => (PayloadType::Message(method), bytes, target),
-                                        Response::ChannelData { bytes, target } => {
-                                            (PayloadType::ChannelData, bytes, target)
+                                        } => (PayloadType::Message(method), &[] as &[u8], bytes, target),
+                                        Response::ChannelData { preamble, bytes, target } => {
+                                            (PayloadType::ChannelData, preamble, bytes, target)
                                         }
                                     };
 
                                     if let Some(endpoint) = target.endpoint {
-                                        exchanger.send(&endpoint, ty, Bytes::copy_from_slice(bytes));
+                                        let mut payload = BytesMut::with_capacity(preamble.len()+bytes.len());
+                                        payload.extend_from_slice(preamble);
+                                        payload.extend_from_slice(bytes);
+                                        exchanger.send(&endpoint, ty, payload.freeze());
                                     } else {
+                                        if !preamble.is_empty() {
+                                            if socket.write(preamble).await.is_err() {
+                                                break;
+                                            }
+                                        }
                                         if socket.write(bytes).await.is_err() {
                                             break;
                                         }
 
                                         reporter.send(
                                             &id,
-                                            &[Stats::SendBytes(bytes.len()), Stats::SendPkts(1)],
+                                            &[Stats::SendBytes(preamble.len()+bytes.len()), Stats::SendPkts(1)],
                                         );
 
                                         if let PayloadType::Message(method) = ty && method.is_error() {
