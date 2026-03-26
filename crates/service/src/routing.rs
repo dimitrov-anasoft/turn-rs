@@ -549,6 +549,27 @@ where
         req.state.manager.get_session(req.id).get_ref() && let Some(local_port) = *allocate_port
     {
         let relay = req.state.manager.get_relay_address(req.id, peer.port())?;
+
+        // NOTE: if the other party has already bound a channel, then use the channel as data
+        // indications might be ignored at this point
+        if let Some(channel) = req.state.manager.get_channel(req.id, &relay) {
+            req.encode_buffer.clear();
+            req.encode_buffer.extend_from_slice(&channel.to_be_bytes());
+            req.encode_buffer.extend_from_slice(&(data.len() as u16).to_be_bytes());
+            req.encode_buffer.extend_from_slice(&data);
+            return Some(Response::ChannelData {
+                preamble: &[],
+                bytes: &req.encode_buffer[..],
+                target: Target {
+                    endpoint: if req.state.endpoint != relay.0 {
+                        Some(relay.0)
+                    } else {
+                        None
+                    }
+                }
+            });
+        }
+
         {
             let mut message = MessageEncoder::extend(DATA_INDICATION, req.payload, req.encode_buffer);
             message.append::<XorPeerAddress>(SocketAddr::new(req.state.interface.ip(), local_port));

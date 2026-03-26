@@ -5,7 +5,9 @@ use codec::{
     crypto::{Password, generate_password},
     message::attributes::PasswordAlgorithm,
 };
-use turn_server_service::{routing::Router, session::ports::PortRange, Service, ServiceHandler, ServiceOptions};
+use turn_server_service::{
+    Service, ServiceHandler, ServiceOptions, routing::Router, session::ports::PortRange,
+};
 
 #[derive(Default, Clone)]
 struct Handler;

@@ -912,6 +912,81 @@ where
         Some((peer, reverse_channel))
     }
 
+    /// ```
+    /// use turn_server_service::session::*;
+    /// use turn_server_service::*;
+    /// use codec::message::attributes::PasswordAlgorithm;
+    /// use codec::crypto::Password;
+    /// use pollster::FutureExt;
+    ///
+    /// use std::net::SocketAddr;
+    ///
+    /// #[derive(Clone)]
+    /// struct ServiceHandlerTest;
+    ///
+    /// impl ServiceHandler for ServiceHandlerTest {
+    ///     async fn get_password(
+    ///         &self,
+    ///         username: &str,
+    ///         algorithm: PasswordAlgorithm,
+    ///     ) -> Option<Password> {
+    ///         if username == "test" {
+    ///             Some(codec::crypto::generate_password(
+    ///                 username, "test", "test", algorithm,
+    ///             ))
+    ///         } else {
+    ///             None
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// let addr = Identifier {
+    ///     source: "127.0.0.1:8080".parse().unwrap(),
+    ///     interface: "127.0.0.1:3478".parse().unwrap(),
+    /// };
+    ///
+    /// let peer_addr = Identifier {
+    ///     source: "127.0.0.1:8081".parse().unwrap(),
+    ///     interface: "127.0.0.1:3478".parse().unwrap(),
+    /// };
+    ///
+    /// let sessions = SessionManager::new(SessionManagerOptions {
+    ///     port_range: (49152..65535).into(),
+    ///     handler: ServiceHandlerTest,
+    /// });
+    ///
+    /// sessions
+    ///     .get_password(&addr, "test", PasswordAlgorithm::Md5)
+    ///     .block_on();
+    /// sessions
+    ///     .get_password(&peer_addr, "test", PasswordAlgorithm::Md5)
+    ///     .block_on();
+    ///
+    /// let port = sessions.allocate(&addr, None).unwrap();
+    /// let peer_port = sessions.allocate(&peer_addr, None).unwrap();
+    ///
+    /// assert!(sessions.create_permission(&addr, &[peer_port]));
+    /// assert!(sessions.create_permission(&peer_addr, &[port]));
+    ///
+    /// assert!(sessions.bind_channel(&peer_addr, port, 0x4000));
+    ///
+    /// assert_eq!(
+    ///     sessions.get_channel(&addr, &Endpoint(peer_addr.source)),
+    ///     Some(0x4000)
+    /// );
+    /// ```
+    pub fn get_channel(&self, addr: &Identifier, endpoint: &Endpoint) -> Option<u16> {
+        let reverse = Identifier {
+            source: endpoint.0,
+            interface: addr.interface,
+        };
+        self.channel_relay_table
+            .read()
+            .get(&reverse)?
+            .iter()
+            .find_map(|(c, e)| if addr.source == e.0 { Some(*c) } else { None })
+    }
+
     /// Get the address of the port binding.
     ///
     /// # Test
