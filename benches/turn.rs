@@ -56,11 +56,11 @@ fn criterion_benchmark(c: &mut Criterion) {
     let local_port = session_manager.allocate(&local_id, None).unwrap();
     let remote_port = session_manager.allocate(&remote_id, None).unwrap();
 
-    session_manager.create_permission(&remote_id, &remote_id.source(), &[local_port]);
-    session_manager.create_permission(&local_id, &local_id.source(), &[remote_port]);
+    session_manager.create_permission(&remote_id, &[local_port]);
+    session_manager.create_permission(&local_id, &[remote_port]);
 
-    session_manager.bind_channel(&remote_id, &remote_id.source(), local_port, 0x4000);
-    session_manager.bind_channel(&local_id, &local_id.source(), remote_port, 0x4000);
+    session_manager.bind_channel(&remote_id, local_port, 0x4000);
+    session_manager.bind_channel(&local_id, remote_port, 0x4000);
 
     let router = service.make_router(local_id.source(), local_id.interface());
 

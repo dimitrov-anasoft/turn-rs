@@ -425,6 +425,8 @@ async fn integration_testing() -> Result<()> {
     assert_eq!(turn_3.request_allocation().await?, turn_3_port);
     assert_eq!(turn_4.request_allocation().await?, turn_4_port);
 
+    // TODO: send indications before binding channels
+
     {
         turn_1.grant_permission(turn_2_port).await?;
         turn_1.grant_permission(turn_3_port).await?;
@@ -545,31 +547,31 @@ async fn integration_testing() -> Result<()> {
     {
         let data = "1 forwards to 2,3,4".as_bytes();
         turn_1.send_indication_to(turn_2_port, data).await?;
-        let ret = turn_2.receive_indication().await?;
-        assert_eq!(ret.peer_port, turn_1_port);
+        let ret = turn_2.receive_channel_frame().await?;
+        assert_eq!(ret.number, 0x4000);
         assert_eq!(ret.payload, data);
 
         turn_1.send_indication_to(turn_3_port, data).await?;
-        let ret = turn_3.receive_indication().await?;
-        assert_eq!(ret.peer_port, turn_1_port);
+        let ret = turn_3.receive_channel_frame().await?;
+        assert_eq!(ret.number, 0x4001);
         assert_eq!(ret.payload, data);
 
         turn_1.send_indication_to(turn_4_port, data).await?;
-        let ret = turn_4.receive_indication().await?;
-        assert_eq!(ret.peer_port, turn_1_port);
+        let ret = turn_4.receive_channel_frame().await?;
+        assert_eq!(ret.number, 0x4002);
         assert_eq!(ret.payload, data);
     }
 
     {
         let data = "2 forwards to 1,3".as_bytes();
         turn_2.send_indication_to(turn_1_port, data).await?;
-        let ret = turn_1.receive_indication().await?;
-        assert_eq!(ret.peer_port, turn_2_port);
+        let ret = turn_1.receive_channel_frame().await?;
+        assert_eq!(ret.number, 0x4000);
         assert_eq!(ret.payload, data);
 
         turn_2.send_indication_to(turn_3_port, data).await?;
-        let ret = turn_3.receive_indication().await?;
-        assert_eq!(ret.peer_port, turn_2_port);
+        let ret = turn_3.receive_channel_frame().await?;
+        assert_eq!(ret.number, 0x4002);
         assert_eq!(ret.payload, data);
 
         turn_2.send_indication_to(turn_4_port, data).await?;
@@ -579,13 +581,13 @@ async fn integration_testing() -> Result<()> {
     {
         let data = "3 forwards to 1,2".as_bytes();
         turn_3.send_indication_to(turn_1_port, data).await?;
-        let ret = turn_1.receive_indication().await?;
-        assert_eq!(ret.peer_port, turn_3_port);
+        let ret = turn_1.receive_channel_frame().await?;
+        assert_eq!(ret.number, 0x4001);
         assert_eq!(ret.payload, data);
 
         turn_3.send_indication_to(turn_2_port, data).await?;
-        let ret = turn_2.receive_indication().await?;
-        assert_eq!(ret.peer_port, turn_3_port);
+        let ret = turn_2.receive_channel_frame().await?;
+        assert_eq!(ret.number, 0x4002);
         assert_eq!(ret.payload, data);
 
         turn_3.send_indication_to(turn_4_port, data).await?;
@@ -595,8 +597,8 @@ async fn integration_testing() -> Result<()> {
     {
         let data = "4 forwards to 1".as_bytes();
         turn_4.send_indication_to(turn_1_port, data).await?;
-        let ret = turn_1.receive_indication().await?;
-        assert_eq!(ret.peer_port, turn_4_port);
+        let ret = turn_1.receive_channel_frame().await?;
+        assert_eq!(ret.number, 0x4002);
         assert_eq!(ret.payload, data);
 
         turn_4.send_indication_to(turn_3_port, data).await?;

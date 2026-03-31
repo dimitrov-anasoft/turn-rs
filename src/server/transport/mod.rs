@@ -4,7 +4,7 @@ pub mod udp;
 use std::{net::SocketAddr, time::Duration};
 
 use anyhow::Result;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 
 use tokio::time::interval;
 
@@ -93,9 +93,10 @@ pub trait Server: Sized + Send {
 
                                 if let Ok(res) = router.route(&buffer, address).await
                                 {
-                                    let (ty, bytes, target) = if let Some(it) = res {
+                                    let (ty, preamble, bytes, target) = if let Some(it) = res {
                                         (
                                             it.method.map(PayloadType::Message).unwrap_or(PayloadType::ChannelData),
+                                            it.preamble,
                                             it.bytes,
                                             it.target,
                                         )
@@ -104,15 +105,23 @@ pub trait Server: Sized + Send {
                                     };
 
                                     if let Some(endpoint) = target.endpoint {
-                                        exchanger.send(&endpoint, ty, Bytes::copy_from_slice(bytes));
+                                        let mut payload = BytesMut::with_capacity(preamble.len()+bytes.len());
+                                        payload.extend_from_slice(preamble);
+                                        payload.extend_from_slice(bytes);
+                                        exchanger.send(&endpoint, ty, payload.freeze());
                                     } else {
+                                        if !preamble.is_empty() {
+                                            if socket.write(preamble).await.is_err() {
+                                                break;
+                                            }
+                                        }
                                         if socket.write(bytes).await.is_err() {
                                             break;
                                         }
 
                                         reporter.send(
                                             &id,
-                                            &[Stats::SendBytes(bytes.len()), Stats::SendPkts(1)],
+                                            &[Stats::SendBytes(preamble.len()+bytes.len()), Stats::SendPkts(1)],
                                         );
 
                                         if let PayloadType::Message(method) = ty && method.is_error() {
